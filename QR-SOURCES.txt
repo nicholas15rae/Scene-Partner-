@@ -1,0 +1,3 @@
+qrcode.js — qrcode-generator 2.0.4 (Kazuhiko Arase, MIT licence, see header)
+jsQR.js — jsqr 1.4.0 (Cosmo Wolfe, Apache-2.0, see JSQR-LICENSE.txt)
+Used only to show and read the pairing codes for Remote mode, on the device.
