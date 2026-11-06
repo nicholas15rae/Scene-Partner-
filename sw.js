@@ -1,14 +1,14 @@
 // Scene Reader service worker: makes the app open offline AND keeps it up to date.
 // Bump VERSION whenever you change any file (the CHANGELOG lists each release).
-const VERSION = 'sr-v1.3.0';
+const VERSION = 'sr-v3.0.0';
 // The big high-quality-voice engine files only change when the library changes,
 // so they live in their own cache and survive app updates (no 23 MB re-download).
-const ENGINE_CACHE = 'sr-engine-kokoro-1.2.1';
+const ENGINE_CACHE = 'sr-engine-kokoro-1.2.1'; // also holds the Piper engine files (same name as v1.2–1.3, so updating doesn't re-download)
 const KEEP = [VERSION, ENGINE_CACHE];
-// Never touched: 'transformers-cache' (the voice model) and 'kokoro-voices' (voice files).
+// Never touched: 'transformers-cache' (Kokoro model), 'kokoro-voices', 'piper-voices' (downloaded voices).
 
 const CORE = [
-  './', 'index.html', 'styles.css', 'app.js', 'parser.js', 'tones.js', 'handsfree.js', 'library.js', 'pdf-import.js', 'kokoro-worker.js',
+  './', 'index.html', 'styles.css', 'app.js', 'parser.js', 'tones.js', 'voices.js', 'handsfree.js', 'library.js', 'media.js', 'prep.js', 'vo.js', 'project.js', 'pdf-import.js', 'kokoro-worker.js', 'piper-worker.js',
   'manifest.webmanifest', 'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'vendor/qrcode.js', 'vendor/jsQR.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png', 'icons/maskable-512.png',
 ];
@@ -37,7 +37,7 @@ self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // Hugging Face downloads are handled by the voice engine
 
   // Voice-engine files: cache-first (large, versioned by library)
-  if (url.pathname.includes('/vendor/kokoro/')) {
+  if (url.pathname.includes('/vendor/kokoro/') || url.pathname.includes('/vendor/piper/')) {
     e.respondWith(
       caches.open(ENGINE_CACHE).then(async (c) => {
         const hit = await c.match(e.request);

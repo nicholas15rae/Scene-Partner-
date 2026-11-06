@@ -3,7 +3,7 @@
 
 'use strict';
 const { parseScript, characters, guessTitle, speakable, normName, newId, phraseRegex, junkKey } = window.SceneParser;
-const { TAGS: TONES, PAUSES, delivery } = window.SceneTones;
+const { TAGS: TONES, PAUSES, CADENCES, delivery } = window.SceneTones;
 
 // Load a plain script once (works from a double-clicked file and from a website)
 const loadScript = (src) => new Promise((resolve, reject) => {
@@ -16,10 +16,10 @@ const loadScript = (src) => new Promise((resolve, reject) => {
 
 /* ------------------------------------------------------------------ storage */
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '3.0.0';
 const KEY_SCENES = 'sr.scenes';
 const KEY_SETTINGS = 'sr.settings';
-const DEFAULTS = { rate: 1, voiceURI: '', readActions: false, fontSize: 24, speakNames: false, allLangs: false, hq: false, kVoice: 'af_heart', kEngine: 'auto', myName: '', narrator: false, nVoice: 'bm_fable', nVoiceURI: '', kFavs: [] };
+const DEFAULTS = { rate: 1, voiceURI: '', readActions: false, fontSize: 24, speakNames: false, allLangs: false, hq: false, kVoice: 'af_heart', kEngine: 'auto', myName: '', narrator: false, nVoice: 'bm_fable', nVoiceURI: '', kFavs: [], vFavs: null, readerRef: '', narratorRef: '', studio: false, studioUrl: 'http://127.0.0.1:5123', imported: [], spk: {} };
 
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { toast('Couldn’t save — storage is full or blocked.'); } };
@@ -28,6 +28,7 @@ let scenes = []; // loaded from the on-device library (IndexedDB) at start-up �
 let settings = { ...DEFAULTS, ...load(KEY_SETTINGS, {}) };
 if (settings.readActions && !('narratorSet' in settings)) { settings.narrator = true; } // v1.2 "read stage directions" → Narrator
 settings.narratorSet = true;
+if (!Array.isArray(settings.vFavs)) settings.vFavs = (settings.kFavs || []).map((k) => 'kokoro:' + k); // v1.3 favourites carry over
 const saveScenes = () => libSave();
 const saveSettings = () => save(KEY_SETTINGS, settings);
 const getScene = (id) => scenes.find((s) => s.id === id);
@@ -176,19 +177,6 @@ function chunks(text) {
 
 const keep = []; // hold references so browsers don't garbage-collect utterances mid-speech
 
-// Speak a line: high-quality (Kokoro) voice when it's on and ready, otherwise the device voice.
-// If Kokoro fails mid-scene, this line (and the rest) fall back to the device voice automatically.
-function say(text, opts = {}) {
-  if (settings.hq && K.status === 'ready') {
-    return sayKokoro(text, opts.k || settings.kVoice || 'af_heart', opts.tone).catch((e) => {
-      console.warn('Kokoro failed, using device voice', e);
-      if (++K.fails >= 2) kCrash('Too many errors');
-      return sayDevice(text, opts);
-    });
-  }
-  if (settings.hq && K.status === 'loading' && !K.warned) { K.warned = true; toast('High-quality voices are still downloading — using the device voice until they’re ready.'); }
-  return sayDevice(text, opts);
-}
 
 let noVoiceWarned = false;
 function sayDevice(text, opts = {}) {
@@ -201,7 +189,7 @@ function sayDevice(text, opts = {}) {
       if (!noVoiceWarned) { noVoiceWarned = true; toast('No on-device voice found. Turn on High-quality voices (Reader settings) to hear the other parts.'); }
       return setTimeout(resolve, 600 + text.length * 45 / settings.rate);
     }
-    const d = delivery(opts.tone);
+    const d = opts.seg || { speed: 1, pitch: 0, gain: 1 };
     const pitch = Math.max(0.1, Math.min(2, (opts.pitch || 1) * Math.pow(2, d.pitch / 12)));
     const rate = Math.max(0.5, Math.min(2.5, settings.rate * d.speed));
     let i = 0, seq = 0, done = false, watchdog;
@@ -214,7 +202,7 @@ function sayDevice(text, opts = {}) {
       const u = new SpeechSynthesisUtterance(part);
       u.rate = rate;
       u.pitch = pitch;
-      u.volume = Math.min(1, d.volume);
+      u.volume = Math.min(1, d.gain);
       if (voice) { u.voice = voice; u.lang = voice.lang; }
       keep.push(u); if (keep.length > 20) keep.shift();
       clearTimeout(watchdog);
@@ -241,7 +229,7 @@ function stopSpeech() {
 // iOS only allows speech after a tap; speak a silent blip on the first tap to unlock it.
 let unlocked = false;
 function unlockSpeech() {
-  if (settings.hq) audioCtx(); // phones only allow audio after a tap
+  if (settings.hq || settings.studio) audioCtx(); // phones only allow audio after a tap
   if (unlocked || !synth) return;
   unlocked = true;
   const u = new SpeechSynthesisUtterance(' ');
@@ -254,51 +242,10 @@ function unlockSpeech() {
    in this browser. Speech is generated in a background worker ON THIS DEVICE — script text is
    never sent anywhere. */
 
-// Every Kokoro voice from the voice packs (tones.js) — add packs there to get more voices
-const K_ALL = window.VoicePacks.filter((p) => p.engine === 'kokoro').flatMap((p) => p.voices.map((v) => ({ ...v, pack: p.id })));
-const K_GROUPS = ['American · Female', 'American · Male', 'British · Female', 'British · Male'];
-const kGroup = (v) => v.accent + ' · ' + v.gender;
-const kInfo = (id) => K_ALL.find((v) => v.id === id) || { id, name: id, grade: '', accent: '', gender: '' };
-const isFav = (id) => (settings.kFavs || []).includes(id);
 const K_CAST_ORDER = ['am_michael', 'af_bella', 'am_fenrir', 'bf_emma', 'bm_george', 'af_nicole', 'am_puck', 'bm_fable', 'af_aoede', 'af_kore', 'af_sarah', 'bf_isabella'];
 const K = { status: 'off', msg: '', worker: null, device: '', dtype: '', loaded: 0, total: 0, jobs: [], busy: null, cache: new Map(), nextId: 1, playTok: 0, src: null, ctx: null, fails: 0, warned: false };
 
-function kVoiceOptions(selected, first = '') {
-  const opt = (v) => `<option value="${v.id}" ${v.id === selected ? 'selected' : ''}>${isFav(v.id) ? '♥ ' : ''}${esc(v.name)} · ${v.grade}</option>`;
-  const favs = K_ALL.filter((v) => isFav(v.id));
-  return first
-    + (favs.length ? `<optgroup label="♥ Favourites">${favs.map(opt).join('')}</optgroup>` : '')
-    + K_GROUPS.map((g) => `<optgroup label="${g}">${K_ALL.filter((v) => kGroup(v) === g).map(opt).join('')}</optgroup>`).join('');
-}
 
-// Voice library: every voice, grouped by accent and gender, with ▶ preview and ♥ favourite
-function openVoiceLibrary() {
-  const d = $('#dlg');
-  const row = (v) => `<div class="vl-row">
-      <button type="button" class="vl-fav ${isFav(v.id) ? 'on' : ''}" data-fav="${v.id}" aria-label="Favourite ${esc(v.name)}" aria-pressed="${isFav(v.id)}">♥</button>
-      <span class="vl-name">${esc(v.name)}</span><span class="vl-grade">${v.grade}</span>
-      <button type="button" class="icon-btn sm" data-kprev="${v.id}" aria-label="Hear ${esc(v.name)}">${I.play}</button>
-    </div>`;
-  d.innerHTML = `<form method="dialog" class="dlg sheet vl">
-      <h3>Voice library</h3>
-      <p class="note">Tap ▶ to hear a voice, ♥ to keep it at the top of every voice list. Grades are the Kokoro authors' quality ratings (A is best).${K.status === 'ready' ? '' : ' <strong>Previews need High-quality voices switched on and ready.</strong>'}</p>
-      ${K_GROUPS.map((g) => `<h4>${g}</h4>${K_ALL.filter((v) => kGroup(v) === g).map(row).join('')}`).join('')}
-      <div class="dlg-row"><span class="grow"></span><button value="ok" class="btn primary">Done</button></div>
-    </form>`;
-  d.onclick = (e) => {
-    const f = e.target.closest('[data-fav]'), pv = e.target.closest('[data-kprev]');
-    if (f) {
-      const id = f.dataset.fav;
-      settings.kFavs = isFav(id) ? settings.kFavs.filter((x) => x !== id) : [...(settings.kFavs || []), id];
-      saveSettings();
-      f.classList.toggle('on', isFav(id)); f.setAttribute('aria-pressed', isFav(id));
-    }
-    if (pv) kPreview(pv.dataset.kprev);
-  };
-  d.onclose = () => { d.onclick = null; stopSpeech(); renderHQ(); renderCastVoices(); renderNarrator(); };
-  d.showModal();
-}
-const kVoiceFor = (scene, who) => castFor(scene, who).k || settings.kVoice || 'af_heart';
 const isPhone = () => navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 
 async function kPlans() {
@@ -313,6 +260,7 @@ async function kPlans() {
   return plans;
 }
 
+const renderHQ = () => renderVoicesPanel();
 function kSet(status, msg = '') { K.status = status; K.msg = msg; renderHQ(); }
 
 async function kokoroStart() {
@@ -443,36 +391,14 @@ function kPlay(clip, tok, fx = {}) {
     const gain = ctx.createGain(); gain.gain.value = fx.gain || 1; node.connect(gain); node = gain;
     if ((fx.gain || 1) > 1) { const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -10; node.connect(comp); node = comp; }
     node.connect(ctx.destination);
+    if (MEDIA.tap) node.connect(MEDIA.tap); // recording a take with AI lines (voiceover / collab)
     src.onended = () => { if (K.src === src) K.src = null; resolve(); };
     K.src = src;
     src.start();
   });
 }
 
-async function sayKokoro(text, voice, tone) {
-  const tok = K.playTok;
-  const fx = kSpec(tone);
-  const parts = chunks(text);
-  const clips = parts.map((p, i) => kJob(p, voice, i === 0, fx.speed));
-  for (let i = 0; i < parts.length; i++) {
-    const clip = await clips[i];
-    if (tok !== K.playTok) return;
-    await kPlay(clip, tok, fx);
-    if (tok !== K.playTok) return;
-  }
-}
 
-// Get the next few reader lines ready while the current one plays (or while you say yours)
-function kPrefetch(scene, fromIdx) {
-  if (!(settings.hq && K.status === 'ready')) return;
-  let n = 0;
-  for (let i = fromIdx; i < scene.blocks.length && n < 2; i++) {
-    const b = scene.blocks[i];
-    if (!isStop(b) || (b.type === 'line' && b.who === scene.me)) continue;
-    const { text, opts } = lineSpeech(scene, b);
-    if (text && K.jobs.length < 4) { const fx = kSpec(opts.tone); chunks(text).slice(0, 2).forEach((p) => kJob(p, opts.k || settings.kVoice, false, fx.speed)); n++; }
-  }
-}
 
 /* ------------------------------------------------------------------ wake lock */
 
@@ -501,17 +427,24 @@ function go(hash) { location.hash = hash; }
 function route() {
   const [, view = '', id = ''] = (location.hash || '#/').split('/');
   if (current.view === 'run' && view !== 'run') { leaveRun(); if (reloadPending) return location.reload(); }
+  if (current.view === 'vo' && view !== 'vo') voLeave();
+  if (current.view === 'project' && view !== 'project') pjLeave();
   current.view = view || 'home';
   current.id = id;
+  app.oninput = null;
   if (view !== 'remote' && typeof rmSendState === 'function') setTimeout(rmSendState, 0);
   if (view === 'keys') { window.scrollTo(0, 0); return renderKeys(); }
   if (view === 'remote') { window.scrollTo(0, 0); return renderRemote(); }
+  if (view === 'vo') { window.scrollTo(0, 0); return id ? renderVo() : renderVoList(); }
+  if (view === 'projects') { window.scrollTo(0, 0); return renderProjects(); }
   const s = id && getScene(id);
   if (view && view !== 'home' && !s) return go('#/');
   window.scrollTo(0, 0);
   if (view === 'edit') renderEdit(s);
   else if (view === 'cast') renderCast(s);
   else if (view === 'run') renderRun(s);
+  else if (view === 'prep') renderPrep();
+  else if (view === 'project') renderProject();
   else renderHome();
 }
 window.addEventListener('hashchange', route);
@@ -665,6 +598,10 @@ function renderHome() {
         <button class="link" data-act="sample">or try a sample scene</button>
       </section>
 
+      <section class="studio-links">
+        <button class="btn big" data-go="#/vo"><span>🎙 Voiceover studio</span></button>
+        <button class="btn big" data-go="#/projects"><span>👥 Collab projects${scenes.some((s) => s.project) ? ` (${scenes.filter((s) => s.project).length})` : ''}</span></button>
+      </section>
       ${libSectionHtml()}
 
       <p class="privacy">${I.lock}<span><strong>Private by design.</strong> Your sides are read and stored only on this device. Nothing is uploaded — not to us, not to anyone.</span></p>
@@ -813,7 +750,7 @@ function ignorePhrase(scene, phrase) {
 function toneSheet(scene, b) {
   return new Promise((resolve) => {
     const d = $('#dlg');
-    const st = { tone: b.tone || '', before: +b.pauseBefore || 0, after: +b.pauseAfter || 0 };
+    const st = { tone: b.tone || '', cadence: b.cadence || '', before: +b.pauseBefore || 0, after: +b.pauseAfter || 0 };
     const pauseRow = (key, label) => `<div class="seg-row"><span>${label}</span><div class="seg" data-pause="${key}">${PAUSES.map((p) =>
       `<button type="button" data-v="${p}" class="${st[key] === p ? 'on' : ''}">${p ? p + 's' : 'None'}</button>`).join('')}</div></div>`;
     d.innerHTML = `<form method="dialog" class="dlg sheet tone-sheet">
@@ -822,13 +759,18 @@ function toneSheet(scene, b) {
         <label class="field col"><span>Direction <em>(shown, never read aloud)</em></span><input id="t-dir" value="${esc(b.dir || '')}" placeholder="e.g. leaning in" autocomplete="off"></label>
         <span class="lbl">Tone</span>
         <div class="tone-grid">${Object.entries(TONES).map(([k, t]) => `<button type="button" data-tone="${k}" class="${st.tone === k ? 'on' : ''}">${t.label}</button>`).join('')}</div>
+        <span class="lbl">Cadence</span>
+        <div class="tone-grid cad">${Object.entries(CADENCES).map(([k, c]) => `<button type="button" data-cad="${k}" class="${(st.cadence || 'steady') === k ? 'on' : ''}" title="${c.hint}">${c.label}</button>`).join('')}</div>
+        <p class="note">Tip: put <strong>*stars*</strong> around a word in the line to stress it, and “ / ” for a breath.</p>
         ${pauseRow('before', 'Pause before')}
         ${pauseRow('after', 'Pause after')}
         <div class="dlg-row"><button type="button" class="btn ghost" data-hear>${I.play}<span>Hear it</span></button><span class="grow"></span><button value="cancel" class="btn ghost">Cancel</button><button value="ok" class="btn primary">Done</button></div>
       </form>`;
-    const apply = (x) => { x.tone = st.tone || undefined; x.pauseBefore = st.before || undefined; x.pauseAfter = st.after || undefined; x.dir = $('#t-dir').value.trim() || undefined; return x; };
+    const apply = (x) => { x.cadence = st.cadence && st.cadence !== 'steady' ? st.cadence : undefined; x.tone = st.tone || undefined; x.pauseBefore = st.before || undefined; x.pauseAfter = st.after || undefined; x.dir = $('#t-dir').value.trim() || undefined; return x; };
     d.onclick = (e) => {
       const t = e.target.closest('[data-tone]'), p = e.target.closest('[data-pause] button');
+      const cd = e.target.closest('[data-cad]');
+      if (cd) { st.cadence = cd.dataset.cad; $$('[data-cad]', d).forEach((x) => x.classList.toggle('on', x === cd)); }
       if (t) { st.tone = st.tone === t.dataset.tone ? '' : t.dataset.tone; $$('[data-tone]', d).forEach((x) => x.classList.toggle('on', x.dataset.tone === st.tone)); }
       if (p) { const key = p.parentElement.dataset.pause; st[key] = +p.dataset.v; $$('button', p.parentElement).forEach((x) => x.classList.toggle('on', x === p)); }
       if (e.target.closest('[data-hear]')) {
@@ -842,7 +784,7 @@ function toneSheet(scene, b) {
       d.onclick = null; stopSpeech();
       if (d.returnValue !== 'ok') return resolve(false);
       apply(b);
-      for (const k of ['tone', 'pauseBefore', 'pauseAfter', 'dir']) if (b[k] === undefined) delete b[k];
+      for (const k of ['tone', 'cadence', 'pauseBefore', 'pauseAfter', 'dir']) if (b[k] === undefined) delete b[k];
       touch(scene);
       rerenderEditKeepScroll(scene);
       resolve(true);
@@ -926,6 +868,7 @@ app.addEventListener('input', (e) => {
 });
 
 app.addEventListener('change', async (e) => {
+  if (prepChange(e) || pjChange(e) || (await voChange(e))) return;
   const scene = getScene(current.id);
   if (e.target.classList.contains('who')) {
     const b = scene.blocks.find((x) => x.id === e.target.closest('.eblock').dataset.id);
@@ -953,9 +896,11 @@ app.addEventListener('change', async (e) => {
     renderHQ(); renderVoiceSelect(); renderNarrator();
   }
   if (e.target.id === 'narrator') { settings.narrator = e.target.checked; saveSettings(); renderNarrator(); }
-  if (e.target.id === 'nVoice') { settings.nVoice = e.target.value; saveSettings(); kPreview(settings.nVoice); }
+  if (e.target.id === 'narratorRef') { settings.narratorRef = e.target.value; saveSettings(); voicePreview(settings.narratorRef, 'Interior. Precinct, interview room, night.'); }
+  if (e.target.id === 'readerRef') { settings.readerRef = e.target.value; saveSettings(); voicePreview(settings.readerRef); renderCastVoices(); }
+  if (e.target.id === 'studio') { settings.studio = e.target.checked; saveSettings(); if (settings.studio) { unlockSpeech(); studioCheck(); } else { ST.status = 'off'; renderVoicesPanel(); renderCastVoices(); renderNarrator(); } }
+  if (e.target.id === 'studioUrl') { settings.studioUrl = e.target.value.trim(); saveSettings(); if (settings.studio) studioCheck(); }
   if (e.target.id === 'nVoiceURI') { settings.nVoiceURI = e.target.value; saveSettings(); }
-  if (e.target.id === 'kVoice') { settings.kVoice = e.target.value; saveSettings(); kPreview(settings.kVoice); }
   if (e.target.id === 'kEngine') {
     settings.kEngine = e.target.value; saveSettings();
     if (K.status === 'ready' || K.status === 'failed') { kKill(); K.status = 'off'; kokoroStart(); }
@@ -964,7 +909,7 @@ app.addEventListener('change', async (e) => {
     const sc = getScene(current.id);
     const name = e.target.closest('.cv').dataset.name;
     sc.cast = sc.cast || {};
-    sc.cast[name] = { ...(sc.cast[name] || {}), k: e.target.value };
+    const c = { ...(sc.cast[name] || {}) }; delete c.k; c.v = e.target.value; sc.cast[name] = c;
     touch(sc);
     previewChar(sc, name);
   }
@@ -1005,10 +950,10 @@ function renderCastVoices() {
   box.innerHTML = others.length ? others.map((n) => {
     const c = castFor(scene, n);
     const p = String(Number(c.pitch) || 1);
-    if (settings.hq) return `<div class="cv" data-name="${esc(n)}">
+    if (settings.hq || ST.status === 'ready') return `<div class="cv" data-name="${esc(n)}">
       <div class="cv-head"><span class="cv-name">${esc(n)}</span>
         <button class="icon-btn sm" data-act="preview-char" data-name="${esc(n)}" aria-label="Hear ${esc(n)}">${I.play}</button></div>
-      <div class="cv-row one"><select class="cv-k" aria-label="High-quality voice for ${esc(n)}">${kVoiceOptions(c.k || '', '<option value="">Reader voice</option>')}</select></div>
+      <div class="cv-row one"><select class="cv-k" aria-label="Voice for ${esc(n)}">${refOptions(c.v || (c.k ? 'kokoro:' + c.k : ''), '<option value="">Same as reader</option>')}</select></div>
     </div>`;
     return `<div class="cv" data-name="${esc(n)}">
       <div class="cv-head"><span class="cv-name">${esc(n)}</span>
@@ -1021,30 +966,31 @@ function renderCastVoices() {
   }).join('') : '<p class="note">Pick your character first.</p>';
 }
 
-function kPreview(voice) {
-  unlockSpeech(); stopSpeech();
-  if (K.status !== 'ready') return toast(K.status === 'loading' ? 'Still downloading — try again in a moment.' : 'High-quality voices aren’t ready yet.');
-  sayKokoro(window.VoicePacks[0].sample, voice).catch(() => toast('Couldn’t play that voice.'));
-}
 
 // Speak this character's first line in their voice
 function previewChar(scene, name) {
   unlockSpeech(); stopSpeech();
   const b = scene.blocks.find((x) => x.type === 'line' && x.who === name);
   const line = b ? speakable(stripName(b.text, name)) : 'Hello.';
-  say((settings.speakNames ? titleCase(name) + '. ' : '') + line.slice(0, 160), { voice: voiceFor(scene, name), pitch: pitchFor(scene, name), k: kVoiceFor(scene, name) });
+  const b2 = b || {};
+  say((settings.speakNames ? titleCase(name) + '. ' : '') + line.slice(0, 160), { voice: voiceFor(scene, name), pitch: pitchFor(scene, name), ref: refFor(scene, name), tone: b2.tone, cadence: b2.cadence });
 }
 
 // Give each other character a different voice (or a different pitch, if this device has only one voice)
 function autoCast(scene) {
   const others = characters(scene.blocks).map((c) => c.name).filter((n) => n !== scene.me);
-  if (settings.hq) {
-    const order = K_CAST_ORDER.filter((v) => v !== settings.kVoice);
+  if (settings.hq || ST.status === 'ready') {
+    // Best voices first, alternating male/female, skipping the reader's voice; favourites win
+    const cat = catalogue().filter((v) => !v.speakers && v.ref !== readerRef());
+    const fav = (settings.vFavs || []).filter((r) => r !== readerRef() && cat.some((v) => v.ref === r));
+    const m = cat.filter((v) => v.gender === 'Male').sort((a, b) => a.rank - b.rank).map((v) => v.ref);
+    const f = cat.filter((v) => v.gender === 'Female').sort((a, b) => a.rank - b.rank).map((v) => v.ref);
+    const pool = [...new Set([...fav, ...m.flatMap((r, i) => [r, f[i]]).filter(Boolean)])];
     scene.cast = scene.cast || {};
-    others.forEach((n, i) => { scene.cast[n] = { ...(scene.cast[n] || {}), k: i === 0 ? '' : order[(i - 1) % order.length] }; });
+    others.forEach((n, i) => { const c = { ...(scene.cast[n] || {}) }; delete c.k; c.v = i === 0 ? '' : pool[(i - 1) % pool.length]; scene.cast[n] = c; });
     touch(scene);
     renderCastVoices();
-    return toast('Each character now has their own high-quality voice.');
+    return toast('Each character now has their own voice. Tip: favourites (♥) are used first.');
   }
   const pool = voiceList().filter((v) => voiceTier(v) !== 'novelty');
   const reader = currentVoice();
@@ -1061,32 +1007,6 @@ function autoCast(scene) {
   toast(ordered.length > 1 ? 'Each character now has their own voice.' : 'This device has one voice, so each character gets a different pitch.');
 }
 
-function renderHQ() {
-  const box = $('#hq-panel');
-  if (!box) return;
-  const st = K.status;
-  const where = K.device === 'webgpu' ? 'WebGPU · full quality' : 'on-device · compact model';
-  box.innerHTML = `
-    <label class="toggle"><input type="checkbox" id="hq" ${settings.hq ? 'checked' : ''}><span class="track"></span><span><strong>High-quality voices</strong> <em>(Kokoro AI)</em></span></label>
-    <p class="note">Natural AI voices that run <strong>on this device</strong>. One-time download of about 92 MB, saved in this browser. Only the voice model is downloaded — your script never leaves your device.</p>
-    ${settings.hq ? `
-      <div class="hq-status ${st}" id="hq-status" aria-live="polite">
-        ${st === 'loading' ? `<div class="kbar"><div id="kbar-fill"></div></div><span id="kbar-text"></span>` : ''}
-        ${st === 'ready' ? `<span class="ok">● Ready</span> <span class="dim">${where}</span>` : ''}
-        ${st === 'failed' ? `<span class="warn">${esc(K.msg)}</span> <button class="btn small" data-act="k-retry">Try again</button>` : ''}
-        ${st === 'off' ? '<span class="dim">Starting…</span>' : ''}
-      </div>
-      <div class="field"><span>Reader voice</span><select id="kVoice">${kVoiceOptions(settings.kVoice)}</select></div>
-      <div class="btn-row"><button class="btn ghost" data-act="k-preview">${I.play}<span>Hear this voice</span></button>
-      <button class="btn ghost" data-act="voice-lib"><span>Browse all ${K_ALL.length} voices</span></button></div>
-      <div class="field"><span>Engine</span><select id="kEngine">
-        <option value="auto" ${settings.kEngine === 'auto' ? 'selected' : ''}>Automatic</option>
-        <option value="wasm" ${settings.kEngine === 'wasm' ? 'selected' : ''}>Compact (~92 MB, best for phones)</option>
-        <option value="webgpu" ${settings.kEngine === 'webgpu' ? 'selected' : ''}>WebGPU (~326 MB, fastest on computers)</option>
-      </select></div>
-      <p class="note">Automatic uses the compact model on phones, and WebGPU on computers that support it. If anything goes wrong, the device voice takes over.</p>` : ''}`;
-  renderHQProgress();
-}
 
 function renderHQProgress() {
   const fill = $('#kbar-fill'), txt = $('#kbar-text');
@@ -1165,6 +1085,11 @@ function renderCast(scene) {
           </ul>
         </details>
       </div>
+      <h2 class="section-h">More with this scene</h2>
+      <div class="btn-row more-row">
+        <button class="btn" data-go="#/prep/${scene.id}"><span>Prep this scene</span></button>
+        <button class="btn" data-act="pj-make" data-id="${scene.id}"><span>${scene.project ? 'Open collab project' : 'Make a collab project'}</span></button>
+      </div>
     </main>
     <footer class="dock">
       <button class="btn huge primary" data-act="to-run" ${scene.me ? '' : 'disabled'}>${scene.me ? `Rehearse as ${esc(scene.me)}` : 'Pick a character'}</button>
@@ -1173,6 +1098,7 @@ function renderCast(scene) {
   renderHQ();
   renderNarrator();
   if (settings.hq) kokoroStart();
+  if (settings.studio && ST.status !== 'ready') studioCheck(true);
 }
 
 function renderNarrator() {
@@ -1181,7 +1107,7 @@ function renderNarrator() {
   box.innerHTML = `
     <label class="toggle"><input type="checkbox" id="narrator" ${settings.narrator ? 'checked' : ''}><span class="track"></span><span><strong>Narrator</strong> — reads scene headings and stage directions in a separate voice</span></label>
     ${settings.narrator ? `<div class="cv-row ${settings.hq ? 'one' : ''}">
-      ${settings.hq ? `<select id="nVoice" aria-label="Narrator voice">${kVoiceOptions(settings.nVoice)}</select>`
+      ${settings.hq || ST.status === 'ready' ? `<select id="narratorRef" aria-label="Narrator voice">${refOptions(narratorRef())}</select>`
         : `<select id="nVoiceURI" aria-label="Narrator voice">${voiceOptions(voiceList(), settings.nVoiceURI, '<option value="">Reader voice</option>')}</select>`}
       </div>
       <button class="btn ghost" data-act="n-preview">${I.play}<span>Hear the narrator</span></button>` : ''}`;
@@ -1254,18 +1180,20 @@ function tagsHtml(b) {
   const t = [];
   if (b.dir) t.push(`<span class="tag dir">${esc(b.dir)}</span>`);
   if (b.tone && b.tone !== 'neutral' && TONES[b.tone]) t.push(`<span class="tag tone t-${b.tone}">${TONES[b.tone].label}</span>`);
+  if (b.cadence && CADENCES[b.cadence]) t.push(`<span class="tag tone">${CADENCES[b.cadence].label}</span>`);
   if (+b.pauseBefore) t.push(`<span class="tag pause">⏸ ${b.pauseBefore}s before</span>`);
   if (+b.pauseAfter) t.push(`<span class="tag pause">⏸ ${b.pauseAfter}s after</span>`);
   return t.length ? `<span class="tags">${t.join('')}</span>` : '';
 }
 
 function runBlock(scene, b, i) {
-  const fmt = (t) => esc(t).replace(/\(([^)]*)\)/g, '<span class="paren">($1)</span>');
+  const fmt = (t) => esc(t).replace(/\(([^)]*)\)/g, '<span class="paren">($1)</span>').replace(/\*([^*]+)\*/g, '<strong class="emph">$1</strong>').replace(/\s\/\s/g, ' <span class="breath" title="breath">/</span> ');
   if (b.type === 'heading') return `<div class="rb heading" data-i="${i}">${esc(b.text)}</div>`;
   if (b.type === 'action') return `<div class="rb action" data-i="${i}">${fmt(b.text)}</div>`;
   const mine = b.who === scene.me;
-  return `<div class="rb line ${mine ? 'mine' : 'theirs'}" data-i="${i}">
-    <div class="speaker">${esc(b.who)}${mine ? '<span class="you">you</span>' : ''}${tagsHtml(b)}</div>
+  const px = prepRunExtras(scene, b);
+  return `${px.before}<div class="rb line ${mine ? 'mine' : 'theirs'}" data-i="${i}">
+    <div class="speaker">${esc(b.who)}${mine ? '<span class="you">you</span>' : ''}${tagsHtml(b)}${px.tag}</div>
     <div class="txt">${fmt(b.text)}</div>
   </div>`;
 }
@@ -1275,8 +1203,8 @@ function lineSpeech(scene, b) {
   let text = b.type === 'heading' ? headingSpeech(b.text) : speakable(b.type === 'line' ? stripName(b.text, b.who) : b.text);
   if (!text) return { text: '', opts: {} };
   const opts = b.type === 'line'
-    ? { voice: voiceFor(scene, b.who), pitch: pitchFor(scene, b.who), k: kVoiceFor(scene, b.who), tone: b.tone }
-    : { voice: narratorDeviceVoice(), k: settings.nVoice || settings.kVoice, tone: b.tone };
+    ? { voice: voiceFor(scene, b.who), pitch: pitchFor(scene, b.who), ref: refFor(scene, b.who), tone: b.tone, cadence: b.cadence }
+    : { voice: narratorDeviceVoice(), ref: narratorRef(), tone: b.tone, cadence: b.cadence };
   // Table-read style: "Dev. You picked the worst diner in the city."
   if (b.type === 'line' && settings.speakNames) text = titleCase(b.who) + '. ' + text;
   return { text, opts };
@@ -1303,14 +1231,14 @@ function step() {
   }
   if (b.type === 'line' && b.who === run.scene.me) {
     run.waiting = true;
-    kPrefetch(run.scene, run.idx + 1); // get the reply ready while you say your line
+    vPrefetch(run.scene, run.idx + 1); // get the reply ready while you say your line
     return paint();
   }
   run.waiting = false;
   paint();
   const { text, opts } = lineSpeech(run.scene, b);
   if (!text) { run.idx++; return step(); }
-  kPrefetch(run.scene, run.idx + 1);
+  vPrefetch(run.scene, run.idx + 1);
   say(text, opts).then(() => {
     if (tok !== run.token || !run.playing) return;
     setTimeout(() => {
@@ -1424,6 +1352,9 @@ app.addEventListener('click', async (e) => {
   const scene = getScene(current.id);
   if (hfClick(act, btn)) return;
   if (act.startsWith('lib-')) { await libClick(act, btn); return; }
+  if (prepClick(act, btn)) return;
+  if (await voClick(act, btn)) return;
+  if (await pjClick(act, btn)) return;
 
   switch (act) {
     // home
@@ -1600,7 +1531,8 @@ app.addEventListener('click', async (e) => {
       break;
     case 'test-voice': unlockSpeech(); stopSpeech(); say('Hi. I’ll be reading with you today. Whenever you’re ready.'); break;
     case 'preview-char': previewChar(scene, btn.dataset.name); break;
-    case 'k-preview': kPreview(settings.kVoice); break;
+    case 'v-preview': voicePreview(readerRef()); break;
+    case 'studio-connect': settings.studio = true; saveSettings(); unlockSpeech(); studioCheck(); break;
     case 'k-retry': kKill(); K.status = 'off'; kokoroStart(); break;
     case 'auto-cast': autoCast(scene); break;
     case 'slower': changeRate(-1); break;
@@ -1626,6 +1558,7 @@ app.addEventListener('click', async (e) => {
 if (!synth) setTimeout(() => toast('This browser can’t speak text aloud. Try Chrome, Safari or Edge.'), 600);
 // High-quality voices were on last time: start loading them in the background (from cache after the first time)
 if (settings.hq && location.protocol !== 'file:') setTimeout(kokoroStart, 1200);
+if (settings.studio) setTimeout(() => studioCheck(true), 1500);
 // Auto-update: check for a new version on every open / return to the app, and switch to it.
 let reloadPending = false;
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

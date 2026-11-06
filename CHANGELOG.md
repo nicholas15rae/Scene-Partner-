@@ -1,3 +1,5 @@
+# Scene Reader — Changelog
+
 ## v3.0.0 — 2026-11-05 · Better voices, Prep + Voiceover (Stage B), Collab projects (Stage C)
 
 ### Voices (top priority)
@@ -45,8 +47,6 @@
 - Version 3.0.0 in the footer. Updates install automatically as before; your scripts, voices and downloaded models are kept.
 - Fixed: on the collab screen a take button could cover its delete × (layout); hidden buttons could show.
 
-=======
->>>>>>> 11c8c4044de38932b33e7e3fb9279b404d776c7f
 ## v1.3.0 — 2026-11-05 · Stage A: core polish
 
 ### Detection

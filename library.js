@@ -10,8 +10,15 @@ const idbDone = (tx) => new Promise((res, rej) => { tx.oncomplete = res; tx.oner
 
 function idbOpen() {
   return new Promise((res, rej) => {
-    const r = indexedDB.open('scene-reader', 1);
-    r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('scenes')) r.result.createObjectStore('scenes', { keyPath: 'id' }); };
+    const r = indexedDB.open('scene-reader', 2);
+    // v1: scripts · v2 (Scene Reader 3.0): recordings, voiceover projects, imported voice files
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains('scenes')) db.createObjectStore('scenes', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio');
+      if (!db.objectStoreNames.contains('vo')) db.createObjectStore('vo', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('voicefiles')) db.createObjectStore('voicefiles');
+    };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
     r.onblocked = () => rej(new Error('blocked'));
@@ -134,6 +141,7 @@ async function libImport(file) {
   if (!file) return;
   let data;
   try { data = JSON.parse(await file.text()); } catch { return toast('That file isn’t a Scene Reader backup.'); }
+  if (data && data.app === 'scene-reader' && data.kind === 'project') { const msg = await pjMerge(data); renderHome(); return toast(msg); }
   const list = Array.isArray(data) ? data : data && data.app === 'scene-reader' && Array.isArray(data.scenes) ? data.scenes : null;
   if (!list) return toast('That file isn’t a Scene Reader backup.');
   let added = 0, same = 0, copies = 0;
@@ -165,6 +173,8 @@ async function libMenu(s) {
         <button value="edit" class="menu-btn">Edit the breakdown</button>
         <button value="rename" class="menu-btn">Rename</button>
         <button value="move" class="menu-btn">Move to folder${s.folder ? ` <em>(${esc(s.folder)})</em>` : ''}</button>
+        <button value="prep" class="menu-btn">Prep</button>
+        <button value="project" class="menu-btn">${s.project ? 'Open collab project' : 'Make a collab project'}</button>
         <button value="dup" class="menu-btn">Duplicate</button>
         <button value="export" class="menu-btn">Export this script (file)</button>
         <button value="delete" class="menu-btn danger">Delete</button>
@@ -174,6 +184,8 @@ async function libMenu(s) {
   d.returnValue = 'cancel';
   const choice = await new Promise((res) => { d.onclose = () => res(d.returnValue); d.showModal(); });
   if (choice === 'open') go(s.me ? '#/cast/' + s.id : '#/edit/' + s.id);
+  else if (choice === 'prep') go('#/prep/' + s.id);
+  else if (choice === 'project') pjClick('pj-make', { dataset: { id: s.id } });
   else if (choice === 'edit') go('#/edit/' + s.id);
   else if (choice === 'rename') {
     const r = await ask({ title: 'Rename script', value: s.title, plain: true });
@@ -231,3 +243,31 @@ async function libClick(act, btn) {
   }
   return false;
 }
+
+/* ------------------------------------------------------------------ on-device blob stores (recordings, voice files) */
+// Small key/value helpers. Everything stays in this browser's IndexedDB.
+const memStore = { audio: new Map(), voicefiles: new Map(), vo: new Map() };
+async function kvGet(store, key) {
+  if (!LIB.ok) return memStore[store].get(key);
+  return idbReq(LIB.db.transaction(store).objectStore(store).get(key));
+}
+async function kvPut(store, key, val) {
+  if (!LIB.ok) { memStore[store].set(key, val); return; }
+  const tx = LIB.db.transaction(store, 'readwrite');
+  store === 'vo' ? tx.objectStore(store).put(val) : tx.objectStore(store).put(val, key);
+  await idbDone(tx);
+}
+async function kvDel(store, key) {
+  if (!LIB.ok) { memStore[store].delete(key); return; }
+  const tx = LIB.db.transaction(store, 'readwrite'); tx.objectStore(store).delete(key); await idbDone(tx);
+}
+async function kvAll(store) {
+  if (!LIB.ok) return [...memStore[store].values()];
+  return idbReq(LIB.db.transaction(store).objectStore(store).getAll());
+}
+const voiceFileGet = (ref) => kvGet('voicefiles', ref);
+const voiceFilePut = (ref, v) => kvPut('voicefiles', ref, v);
+const voiceFileDel = (ref) => kvDel('voicefiles', ref);
+const audioGet = (id) => kvGet('audio', id);
+const audioPut = (id, blob) => kvPut('audio', id, blob);
+const audioDel = (id) => kvDel('audio', id);

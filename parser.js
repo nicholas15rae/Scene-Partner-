@@ -276,7 +276,7 @@ function guessTitle(blocks, fallback = 'Untitled scene') {
 function speakable(text) {
   return text
     .replace(/\([^)]*\)/g, ' ')
-    .replace(/[*_]/g, '')
+    .replace(/_/g, '')
     .replace(/\s*--+\s*/g, ', ')
     .replace(/\s*—\s*/g, ', ')
     .replace(/\s+/g, ' ')

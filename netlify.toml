@@ -5,9 +5,10 @@
 [[headers]]
   for = "/*"
   [headers.values]
-    # Only this site's own files may load. The single exception: the high-quality voice MODEL
-    # may be downloaded from Hugging Face (huggingface.co / hf.co). Script text is never sent.
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co; font-src 'self' data:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
+    # Only this site's own files may load. Connections allowed: Hugging Face (voice MODEL downloads only),
+    # and your own Studio voice server (this computer, or HTTPS on your home network — the app itself
+    # refuses any address that isn't on your own computer/network). Script text never goes to the cloud.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
     Referrer-Policy = "no-referrer"
     X-Content-Type-Options = "nosniff"
     X-Robots-Tag = "noindex"
