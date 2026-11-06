@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co http://127.0.0.1:* http://localhost:* https:; font-src 'self' data:; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>Scene Reader</title>
+  <meta name="description" content="A private scene partner for self-tapes. Your sides never leave your device.">
+  <meta name="theme-color" content="#0e0d0c">
+  <meta name="color-scheme" content="dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Scene Reader">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Plain scripts (not modules) so double-clicking index.html works too -->
+  <script defer src="parser.js"></script>
+  <script defer src="tones.js"></script>
+  <script defer src="voices.js"></script>
+  <script defer src="handsfree.js"></script>
+  <script defer src="library.js"></script>
+  <script defer src="media.js"></script>
+  <script defer src="prep.js"></script>
+  <script defer src="vo.js"></script>
+  <script defer src="project.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+  <dialog id="dlg"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <noscript>Scene Reader needs JavaScript turned on.</noscript>
+</body>
+</html>

@@ -1,0 +1,3 @@
+kokoro.web.js — kokoro-js 1.2.1 (npm, official: hexgrad/kokoro, published by xenova), bundles @huggingface/transformers 3.5.1
+ort-wasm-simd-threaded.jsep.* — from @huggingface/transformers 3.5.1 dist (ONNX Runtime Web), matching the bundled runtime
+Model: onnx-community/Kokoro-82M-v1.0-ONNX, downloaded from Hugging Face at runtime and cached in the browser

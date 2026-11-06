@@ -1,0 +1,4 @@
+piper_phonemize.mjs/.wasm/.data — @diffusionstudio/piper-wasm 1.0.0 (MIT): Piper phonemizer built from rhasspy/piper-phonemize (MIT) with espeak-ng (GPL-3.0) and its language data.
+  Patched: worker detection + ES module export (see header of piper_phonemize.mjs).
+ort.webgpu.min.mjs — onnxruntime-web 1.22.0-dev.20250409-89f8206ba4 (MIT). Uses the SAME WASM files already in vendor/kokoro/ (byte-identical), so nothing is duplicated.
+Voices: official rhasspy/piper-voices on Hugging Face, downloaded per voice when you choose one, cached in this browser.
